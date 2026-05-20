@@ -157,17 +157,34 @@ def make_key(row: Dict[str, str], key_fields: Sequence[str]) -> Tuple[str, ...]:
     return tuple(row[field] for field in key_fields)
 
 
+def split_duplicate_rows(
+    rows: Sequence[Dict[str, str]], key_fields: Sequence[str]
+) -> Tuple[List[Dict[str, str]], List[Dict[str, str]]]:
+    key_counts: Dict[Tuple[str, ...], int] = {}
+    for row in rows:
+        key = make_key(row, key_fields)
+        key_counts[key] = key_counts.get(key, 0) + 1
+
+    duplicate_keys = {key for key, count in key_counts.items() if count > 1}
+    unique_rows: List[Dict[str, str]] = []
+    duplicate_rows: List[Dict[str, str]] = []
+
+    for row in rows:
+        key = make_key(row, key_fields)
+        if key in duplicate_keys:
+            duplicate_rows.append(row)
+        else:
+            unique_rows.append(row)
+
+    return unique_rows, duplicate_rows
+
+
 def index_rows(
-    rows: Iterable[Dict[str, str]], key_fields: Sequence[str], feed_label: str
+    rows: Iterable[Dict[str, str]], key_fields: Sequence[str]
 ) -> Dict[Tuple[str, ...], Dict[str, str]]:
     indexed: Dict[Tuple[str, ...], Dict[str, str]] = {}
     for row in rows:
-        key = make_key(row, key_fields)
-        if key in indexed:
-            raise FeedCompareError(
-                f"Duplicate key detected in {feed_label}: {key!r}"
-            )
-        indexed[key] = row
+        indexed[make_key(row, key_fields)] = row
     return indexed
 
 
@@ -210,15 +227,42 @@ def write_csv(path: Path, fieldnames: Sequence[str], rows: Iterable[Dict[str, st
             writer.writerow({field: row.get(field, "") for field in fieldnames})
 
 
+def build_report_paths(feed_a_path: Path, feed_b_path: Path, out_dir: Path) -> Dict[str, Path]:
+    feed_a_name = feed_a_path.stem
+    feed_b_name = feed_b_path.stem
+    return {
+        "missing_a": out_dir / f"{feed_a_name}-missing.csv",
+        "missing_b": out_dir / f"{feed_b_name}-missing.csv",
+        "duplicates_a": out_dir / f"{feed_a_name}-duplicates-ignored.csv",
+        "duplicates_b": out_dir / f"{feed_b_name}-duplicates-ignored.csv",
+        "match": out_dir / "match.csv",
+        "mismatch_a": out_dir / f"{feed_a_name}-mismatch.csv",
+        "mismatch_b": out_dir / f"{feed_b_name}-mismatch.csv",
+        "mismatch_joined": out_dir / "mismatch-joined.csv",
+    }
+
+
+def remove_stale_reports(feed_a_path: Path, feed_b_path: Path, out_dir: Path) -> Dict[str, Path]:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    report_paths = build_report_paths(feed_a_path, feed_b_path, out_dir)
+    for path in report_paths.values():
+        path.unlink(missing_ok=True)
+    return report_paths
+
+
 def compare_feeds(
     feed_a_path: Path, feed_b_path: Path, config: Config, out_dir: Path
 ) -> None:
+    report_paths = remove_stale_reports(feed_a_path, feed_b_path, out_dir)
     fields_a, rows_a = load_csv(feed_a_path)
     fields_b, rows_b = load_csv(feed_b_path)
     fieldnames = validate_fields(fields_a, fields_b, config)
 
-    indexed_a = index_rows(rows_a, config.key_fields, "feed-a")
-    indexed_b = index_rows(rows_b, config.key_fields, "feed-b")
+    rows_a_for_compare, duplicates_a = split_duplicate_rows(rows_a, config.key_fields)
+    rows_b_for_compare, duplicates_b = split_duplicate_rows(rows_b, config.key_fields)
+
+    indexed_a = index_rows(rows_a_for_compare, config.key_fields)
+    indexed_b = index_rows(rows_b_for_compare, config.key_fields)
 
     missing_a: List[Dict[str, str]] = []
     missing_b: List[Dict[str, str]] = []
@@ -227,7 +271,7 @@ def compare_feeds(
     mismatch_b: List[Dict[str, str]] = []
     mismatch_joined: List[Dict[str, str]] = []
 
-    for row_a in rows_a:
+    for row_a in rows_a_for_compare:
         key = make_key(row_a, config.key_fields)
         row_b = indexed_b.get(key)
         if row_b is None:
@@ -246,25 +290,22 @@ def compare_feeds(
             }
         )
 
-    for row_b in rows_b:
+    for row_b in rows_b_for_compare:
         key = make_key(row_b, config.key_fields)
         if key not in indexed_a:
             missing_b.append(row_b)
 
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    feed_a_name = feed_a_path.stem
-    feed_b_name = feed_b_path.stem
-
-    write_csv(out_dir / f"{feed_a_name}-missing.csv", fieldnames, missing_a)
-    write_csv(out_dir / f"{feed_b_name}-missing.csv", fieldnames, missing_b)
-    write_csv(out_dir / "match.csv", fieldnames, matches)
-    write_csv(out_dir / f"{feed_a_name}-mismatch.csv", fieldnames, mismatch_a)
-    write_csv(out_dir / f"{feed_b_name}-mismatch.csv", fieldnames, mismatch_b)
+    write_csv(report_paths["missing_a"], fieldnames, missing_a)
+    write_csv(report_paths["missing_b"], fieldnames, missing_b)
+    write_csv(report_paths["duplicates_a"], fieldnames, duplicates_a)
+    write_csv(report_paths["duplicates_b"], fieldnames, duplicates_b)
+    write_csv(report_paths["match"], fieldnames, matches)
+    write_csv(report_paths["mismatch_a"], fieldnames, mismatch_a)
+    write_csv(report_paths["mismatch_b"], fieldnames, mismatch_b)
     joined_fieldnames = [f"a_{field}" for field in fieldnames] + [
         f"b_{field}" for field in fieldnames
     ]
-    write_csv(out_dir / "mismatch-joined.csv", joined_fieldnames, mismatch_joined)
+    write_csv(report_paths["mismatch_joined"], joined_fieldnames, mismatch_joined)
 
 
 def main(argv: Sequence[str] | None = None) -> int:

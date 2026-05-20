@@ -3,3 +3,5 @@ id,code,name,amount,status
 2,BB-002,Gadget,20.0,READY
 3,CC-003,OnlyInA,30.0,ACTIVE
 5,EE-005,NumberDrift,50.0,ACTIVE
+6,FF-006,DupA-1,60.0,ACTIVE
+6,FF-006,DupA-2,60.0,ACTIVE

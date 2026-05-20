@@ -91,6 +91,14 @@ class FeedCompareCliTests(unittest.TestCase):
                 [{"id": "4", "name": "OnlyB", "amount": "40"}],
             )
             self.assertEqual(
+                read_csv(out_dir / "feed-a-duplicates-ignored.csv"),
+                [],
+            )
+            self.assertEqual(
+                read_csv(out_dir / "feed-b-duplicates-ignored.csv"),
+                [],
+            )
+            self.assertEqual(
                 read_csv(out_dir / "match.csv"),
                 [{"id": "1", "name": "Alice", "amount": "10.0000001"}],
             )
@@ -133,22 +141,58 @@ class FeedCompareCliTests(unittest.TestCase):
             self.assertEqual(result.returncode, 1)
             self.assertIn("Feed columns are not compatible", result.stderr)
 
-    def test_fails_on_duplicate_key(self):
+    def test_ignores_duplicate_keys_and_writes_reports(self):
         with tempfile.TemporaryDirectory() as tmp:
             temp_dir = Path(tmp)
             write_csv(
                 temp_dir / "feed-a.csv",
-                [["id", "name"], ["1", "Alice"], ["1", "Alice2"]],
+                [
+                    ["id", "name"],
+                    ["1", "Alice"],
+                    ["1", "Alice2"],
+                    ["2", "OnlyA"],
+                    ["3", "Shared"],
+                ],
             )
             write_csv(
                 temp_dir / "feed-b.csv",
-                [["id", "name"], ["1", "Alice"]],
+                [
+                    ["id", "name"],
+                    ["3", "Shared"],
+                    ["4", "OnlyB"],
+                    ["5", "DupB1"],
+                    ["5", "DupB2"],
+                ],
             )
 
             result = self.run_cli(temp_dir, {"key_fields": ["id"]})
 
-            self.assertEqual(result.returncode, 1)
-            self.assertIn("Duplicate key detected", result.stderr)
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+            out_dir = temp_dir / "out"
+
+            self.assertEqual(
+                read_csv(out_dir / "feed-a-duplicates-ignored.csv"),
+                [{"id": "1", "name": "Alice"}, {"id": "1", "name": "Alice2"}],
+            )
+            self.assertEqual(
+                read_csv(out_dir / "feed-b-duplicates-ignored.csv"),
+                [{"id": "5", "name": "DupB1"}, {"id": "5", "name": "DupB2"}],
+            )
+            self.assertEqual(
+                read_csv(out_dir / "match.csv"),
+                [{"id": "3", "name": "Shared"}],
+            )
+            self.assertEqual(
+                read_csv(out_dir / "feed-a-missing.csv"),
+                [{"id": "2", "name": "OnlyA"}],
+            )
+            self.assertEqual(
+                read_csv(out_dir / "feed-b-missing.csv"),
+                [{"id": "4", "name": "OnlyB"}],
+            )
+            self.assertEqual(read_csv(out_dir / "feed-a-mismatch.csv"), [])
+            self.assertEqual(read_csv(out_dir / "feed-b-mismatch.csv"), [])
+            self.assertEqual(read_csv(out_dir / "mismatch-joined.csv"), [])
 
     def test_fails_on_invalid_numeric_value(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -169,6 +213,41 @@ class FeedCompareCliTests(unittest.TestCase):
 
             self.assertEqual(result.returncode, 1)
             self.assertIn("configured as number", result.stderr)
+
+    def test_removes_stale_reports_before_failed_run(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            temp_dir = Path(tmp)
+            out_dir = temp_dir / "out"
+            out_dir.mkdir()
+
+            stale_paths = [
+                out_dir / "feed-a-missing.csv",
+                out_dir / "feed-b-missing.csv",
+                out_dir / "feed-a-duplicates-ignored.csv",
+                out_dir / "feed-b-duplicates-ignored.csv",
+                out_dir / "match.csv",
+                out_dir / "feed-a-mismatch.csv",
+                out_dir / "feed-b-mismatch.csv",
+                out_dir / "mismatch-joined.csv",
+            ]
+            for path in stale_paths:
+                path.write_text("stale\n", encoding="utf-8")
+
+            write_csv(
+                temp_dir / "feed-a.csv",
+                [["id", "name"], ["1", "Alice"]],
+            )
+            write_csv(
+                temp_dir / "feed-b.csv",
+                [["id", "title"], ["1", "Alice"]],
+            )
+
+            result = self.run_cli(temp_dir, {"key_fields": ["id"]})
+
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("Feed columns are not compatible", result.stderr)
+            for path in stale_paths:
+                self.assertFalse(path.exists(), msg=f"stale report was not removed: {path}")
 
 
 if __name__ == "__main__":
