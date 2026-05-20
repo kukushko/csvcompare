@@ -1,0 +1,5 @@
+id,code,name,amount,status
+1,AA-001,Widget,10.0000001,ACTIVE
+2,BB-002,Gadget,20.0,READY
+3,CC-003,OnlyInA,30.0,ACTIVE
+5,EE-005,NumberDrift,50.0,ACTIVE

@@ -1,0 +1,17 @@
+{
+  "key_fields": ["id"],
+  "fields": {
+    "name": {
+      "type": "string",
+      "case_sensitive": false
+    },
+    "code": {
+      "type": "string",
+      "case_sensitive": true
+    },
+    "amount": {
+      "type": "number",
+      "tolerance": 0.000001
+    }
+  }
+}
